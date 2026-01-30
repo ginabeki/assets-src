@@ -1,0 +1,1849 @@
+// eslint-disable-next-line prop-types
+
+import GLSDkOpenMap2 from "./GLSDk-open-map";
+import GLSDkGmaps from "./GLSDk-gmaps";
+import Woocommerce from './GLSDk-woo-commerce.js'
+
+class GLSDkWidget {
+    constructor(options) {
+        this.pickupPoints = [];
+        this.selectedPoint = null;
+        this.options = options;
+
+        this.markers = [];
+        this.host = options.host || 'https://GLSDk.me';
+        this.debug = options.debug || 0;
+
+        this.mapParentContainer = options.mapParentContainer || 'body';
+        this.buttonParentContainer = options.buttonParentContainer || '';
+        this.isScriptLoaded = false;
+        this.buttonClass = this.options.button_class || '';
+        this.labels = this.options.labels || {};
+
+        this.platform = new Woocommerce(options.ajax_url);
+        this.timeoutKeyDown = null;
+        this.searchRunning = false;
+        this.address = this.options.address || null;
+        this.carrier_id = this.options.carrierId || 0;
+        this.lang = 'en';
+        this.weekdaynames = [GLSDk_monday,GLSDk_tuesday, GLSDk_wednesday, GLSDk_thursday, GLSDk_friday, GLSDk_saturday, GLSDk_sunday];
+        this.selectedDisplayOption = 0;
+        this.cacheResults = {};
+        this.carrierCache = {};
+
+        console.log("Jeste checkout ili nije");
+
+        jQuery(document).ready(() => {
+            let hasRunCheckVisibility = false;  // Ensure the visibility check only runs once
+            let hasRunPlaceOrderCheck = false;
+
+            // Check visibility for shipping options (run only once)
+            const checkVisibility = setInterval(() => {
+                const inputElement = jQuery(".wc-block-components-shipping-rates-control__package");
+                if (inputElement.is(':visible') && !hasRunCheckVisibility) {
+                    hasRunCheckVisibility = true;
+                    clearInterval(checkVisibility);  // Clear interval after first successful check
+
+                    console.log("Ovdeeee sam");
+                    window.selectedText = "";
+                    window.selectedText = jQuery("fieldset.wc-block-checkout__shipping-option")
+                        .find(".wc-block-components-radio-control__input:checked")
+                        .closest("label")
+                        .find(".wc-block-components-radio-control__label")
+                        .text();
+
+                    if (window.selectedText === "") {
+                        console.log("Prazan");
+                        jQuery("fieldset.wc-block-checkout__shipping-option")
+                            .find(".wc-block-components-radio-control__option-layout")
+                            .each(function () {
+                                window.selectedText = jQuery(this).find(".wc-block-components-radio-control__label").text();
+                            });
+                    }
+
+                    if (typeof this.isBlockCheckout === "function" && this.isBlockCheckout()) {
+                        this.getSelectedCarrier();
+                        this.getFormChange();
+                    }
+
+                    this.getOnClick();
+                }
+            }, 500);  // Interval delay in milliseconds
+
+            // Check visibility for "Place Order" button (run only once)
+            const placeOrderCheck = setInterval(() => {
+                const placeOrderButton = jQuery("#place_order");
+                if (placeOrderButton.is(':visible') && !hasRunPlaceOrderCheck) {
+                    hasRunPlaceOrderCheck = true;
+                    clearInterval(placeOrderCheck);  // Clear interval after first successful check
+
+                    console.log("Ovdeeee sam visible checkout");
+
+                    placeOrderButton.on('click', function (e) {
+                        let shipping_pickup_id = jQuery("#shipping_pickup_id").val();
+                        console.log("Clicked");
+                        console.log(window.carrier_id);
+                        console.log(window.mandatoryData);
+                        if (window.mandatoryData !== "" && window.mandatoryData.pickupMandatory && shipping_pickup_id === "") {
+                            console.log("USAO IF");
+                            e.preventDefault();  // Prevent default form submission
+
+                            // Modal creation
+                            const modal = jQuery('<div>', { id: 'myModal', css: {
+                                    'display': 'none',
+                                    'position': 'fixed',
+                                    'z-index': '1',
+                                    'left': '0',
+                                    'top': '0',
+                                    'width': '100%',
+                                    'height': '100%',
+                                    'overflow': 'auto',
+                                    'background-color': 'rgba(0,0,0,0.4)'
+                                }});
+
+                            const modalContent = jQuery('<div>', { css: {
+                                    'background-color': '#fefefe',
+                                    'margin': '15% auto',
+                                    'padding': '20px',
+                                    'border': '1px solid #888',
+                                    'width': '80%'
+                                }});
+
+                            const closeButton = jQuery('<span>', { text: '×', css: {
+                                    'color': '#aaa',
+                                    'float': 'right',
+                                    'font-size': '28px',
+                                    'font-weight': 'bold',
+                                    'cursor': 'pointer'
+                                }});
+
+                            const message = jQuery('<p>', { text: GLSDk_mandatory_point });
+
+                            let button = jQuery("<button class='button alt Bpost-pick-location' id='Bpost_pickup_button' type='button' onClick='Bpost.getPickupLocations(event)'>" + Bpost_choose_pickup_location + "</button>");
+
+                            // Append the elements
+                            modalContent.append(closeButton);
+                            modalContent.append(message);
+                            modal.append(modalContent);
+                            modalContent.append(button);
+
+                            jQuery('body').append(modal);
+
+                            // Show the modal
+                            modal.show();
+
+                            // Close modal handlers
+                            closeButton.on('click', function() {
+                                modal.hide();
+                            });
+
+                            jQuery(window).on('click', function(event) {
+                                if (jQuery(event.target).is(modal)) {
+                                    modal.hide();
+                                }
+                            });
+
+                            return false;  // Prevent submission
+                        }
+                    });
+                }
+            }, 500);  // Interval delay in milliseconds
+        });
+
+        this.getOnSubmitButtonBlockClickNoTheme();
+        this.getThemeShippingMethod(options);
+
+
+
+
+    }
+
+
+    getThemeShippingMethod(options){
+
+        console.log("Options");
+        console.log(options);
+
+        if (jQuery('.woocommerce-checkout-payment').length > 0) {
+
+            jQuery(document).ajaxComplete((event, xhr, settings) => {
+                if (settings.url.includes("update_order_review")) {
+                    console.log("Complete request");
+
+                        console.log('Request made to wc-ajax=update_order_review');
+                        console.log(jQuery('.Bpost-pick-location'));
+
+                        var checkedRadio = jQuery('#shipping_method input[type="radio"]:checked');
+
+                        // Get the associated label text of the checked radio button
+                        var selectedText = checkedRadio.siblings('label').text().split(':')[0].trim();
+
+                        // Log or use the selected shipping method
+                        console.log('Selected shipping method: ' + selectedText);
+
+                        if (selectedText == ''){
+                            // Select the parent element containing the list of shipping methods
+                            const shippingMethodsList = document.querySelector('#shipping_method');
+
+// Check if the list exists
+                            if (shippingMethodsList) {
+                                // Traverse the list items
+                                const shippingMethodItems = shippingMethodsList.querySelectorAll('li');
+
+                                // Iterate over each list item
+                                shippingMethodItems.forEach((item) => {
+                                    // Find the <label> element inside the <li>
+                                    const labelElement = item.querySelector('label');
+
+                                    if (labelElement) {
+                                        // Extract the text content before the colon (:) to get the dynamic title
+                                        const labelText = labelElement.textContent.trim();
+                                        selectedText = labelText.split(':')[0].trim();
+                                        console.log('Shipping Method Title:', selectedText);
+                                    }
+                                });
+                            }
+
+                        }
+
+                        let req = {
+                            'action': 'Bpost_selected_carrier',
+                            'carrier': selectedText
+                        };
+
+                        console.log("Dosao si dovde");
+                        console.log(req);
+
+                        jQuery.getJSON(window.location.origin + '/wp-admin/admin-ajax.php?', req ,  (data)  => {
+                            console.log("Caoaooo nasaooo22");
+                            console.log(data.status);
+                            if (data.status == 1 ){
+                                console.log("Caooooo status 123");
+                                if (data.pickupMandatory == true){
+                                    window.mandatoryData = data;
+                                }
+                                this.carrier_id = data.carrier_id;
+                                window.carrier_id = data.carrier_id;
+                                jQuery(document).ready(() => {
+                                    var checkVisibility = setInterval(() => {
+                                        var inputElement = jQuery(".woocommerce-checkout-payment");
+
+                                        if (inputElement.is(':visible')) {
+                                            // The input element is visible, you can proceed with your script
+                                            clearInterval(checkVisibility); // Stop checking
+                                            // Your code here
+                                            console.log("ITS VISIBLE 222");
+                                            jQuery('#place_order').prop('disabled', true);
+                                            if (jQuery("#pickupText").length == 0){
+                                                jQuery('#place_order').after('<p id="pickupText" style="color:red;">Select pickup point</p>');
+                                            }
+                                            else if (jQuery("#pickupText").length > 0){
+                                                jQuery("#pickupText").show();
+                                            }
+
+                                            jQuery('.Bpost-pick-location').show();
+                                        }
+                                    }, 100); // Check every 100 milliseconds
+
+                                });
+
+                            } else {
+                                console.log("Else nema pickup");
+                                jQuery('.Bpost-pick-location').hide();
+
+
+                                jQuery('#shipping_pickup_id').val('');
+                                jQuery('#shipping_pickup_label').val('');
+                                jQuery('#shipping_pickup_extended').val('');
+
+                                // Hide the span element
+                                jQuery('.Bpost-pickup__description').hide();
+
+                                if (jQuery('.Bpost-pickup__description').length > 0){
+                                    console.log("Usao iako nema");
+                                    jQuery('.Bpost-pickup__description').hide();
+                                }
+
+
+                                jQuery('#place_order').prop('disabled', false);
+                                jQuery('#pickupText').hide();
+
+                            }
+
+                        }).fail((err) => {
+                            console.log("Fatal error widget requesting points do we have an API bug?");
+                        });
+
+
+                }
+            });
+
+            (function(open) {
+                XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
+                    // Check if the request URL contains 'wc-ajax=update_order_review'
+                    if (url.indexOf('wc-ajax=update_order_review') !== -1) {
+                        console.log('Request made to wc-ajax=update_order_review');
+                        console.log(jQuery('.Bpost-pick-location'));
+
+                        var checkedRadio = jQuery('#shipping_method input[type="radio"]:checked');
+
+                        // Get the associated label text of the checked radio button
+                        var selectedText = checkedRadio.siblings('label').text().split(':')[0].trim();
+
+                        // Log or use the selected shipping method
+                        console.log('Selected shipping method: ' + selectedText);
+
+                        let req = {
+                            'action': 'Bpost_selected_carrier',
+                            'carrier': selectedText
+                        };
+
+                        console.log("Dosao si dovde");
+                        console.log(req);
+
+                        jQuery.getJSON(window.location.origin + '/wp-admin/admin-ajax.php?', req ,  (data)  => {
+                            console.log("Caoaooo nasaooo22");
+                            console.log(data.status);
+                            if (data.status == 1 ){
+                                console.log("Caooooo status 123");
+                                if (data.pickupMandatory == true){
+                                    window.mandatoryData = data;
+                                }
+                                this.carrier_id = data.carrier_id;
+                                window.carrier_id = data.carrier_id;
+                                jQuery(document).ready(() => {
+                                    var checkVisibility = setInterval(() => {
+                                        var inputElement = jQuery(".woocommerce-checkout-payment");
+
+                                        if (inputElement.is(':visible')) {
+                                            // The input element is visible, you can proceed with your script
+                                            clearInterval(checkVisibility); // Stop checking
+                                            // Your code here
+                                            console.log("ITS VISIBLE 222");
+                                            jQuery('#place_order').prop('disabled', true);
+                                            if (jQuery("#pickupText").length == 0){
+                                                jQuery('#place_order').after('<p id="pickupText" style="color:red;">Select pickup point</p>');
+                                            }
+                                            else if (jQuery("#pickupText").length > 0){
+                                                jQuery("#pickupText").show();
+                                            }
+
+                                            jQuery('.Bpost-pick-location').show();
+                                        }
+                                    }, 100); // Check every 100 milliseconds
+                                });
+                            } else {
+                                console.log("Else nema pickup");
+                                jQuery('.Bpost-pick-location').hide();
+
+                                // Remove values from hidden inputs
+                                jQuery('#shipping_pickup_id').val('');
+                                jQuery('#shipping_pickup_label').val('');
+                                jQuery('#shipping_pickup_extended').val('');
+
+                                // Hide the span element
+                                jQuery('.Bpost-pickup__description').hide();
+
+                                if (jQuery('.Bpost-pickup__description').length > 0){
+                                    console.log("Usao iako nema");
+                                    jQuery('.Bpost-pickup__description').hide();
+                                }
+
+                                jQuery('#place_order').prop('disabled', false);
+                                jQuery('#pickupText').hide();
+
+                            }
+
+                        }).fail((err) => {
+                            console.log("Fatal error widget requesting points do we have an API bug?");
+                        });
+
+                    }
+
+                    // Call the original open method
+                    open.apply(this, arguments);
+                };
+            })(XMLHttpRequest.prototype.open);
+        }
+    }
+
+    getFormChange(){
+        let debounceTimer;
+        let previousSelectedText = "";
+        let $shippingLoader = null;
+        jQuery(".wc-block-checkout__form").on('change', () => {
+            console.log("Form changed! block block");
+            clearTimeout(debounceTimer);
+
+            if (jQuery('#shipping-loader').length <= 0) {
+
+                $shippingLoader  = jQuery('<div id="shipping-loader">Loading shipping method data...</div>').css({
+                    'display': 'flex',
+                    'align-items': 'center',
+                    'font-size': '14px',
+                    'color': '#333',
+                    'margin-top': '10px'
+                });
+
+                // Append the loader text to the bottom of the #shipping-option element
+                jQuery('#shipping-option').append($shippingLoader);
+            }
+           this.disableButton();
+            debounceTimer = setTimeout(() => {
+                const selectedText = this.getSelectedShippingText();
+                
+                // Only proceed if the selection has actually changed
+                if (selectedText !== previousSelectedText) {
+                    previousSelectedText = selectedText;
+                    window.selectedText = selectedText;
+                    this.getSelectedCarrier();
+                } else {
+                    // Remove loader if selection hasn't changed
+                    jQuery('#shipping-loader').remove();
+                    this.enableButton();
+                }
+            }, 500);
+        });
+        this.enableButton();
+    }
+
+    // New helper method to get the selected shipping text
+getSelectedShippingText() {
+    // Try to get the checked radio button's label text
+    let selectedText = jQuery("fieldset.wc-block-checkout__shipping-option")
+        .find(".wc-block-components-radio-control__input:checked")
+        .closest("label")
+        .find(".wc-block-components-radio-control__label")
+        .text();
+    
+    // Fallback if nothing is selected
+    if (!selectedText) {
+        jQuery("fieldset.wc-block-checkout__shipping-option")
+            .find(".wc-block-components-radio-control__option-layout")
+            .each(function() {
+                selectedText = jQuery(this).find(".wc-block-components-radio-control__label").text();
+                return false; // Break after first item
+            });
+    }
+    
+    return selectedText;
+}
+
+    getOnSubmitButtonBlockClickNoTheme() {
+        console.log("Submitted no theme");
+
+        var checkVisibility = setInterval(() => {
+            var inputElement =  jQuery('.wc-block-components-checkout-place-order-button');
+
+            if (inputElement.is(':visible')) {
+                // The input element is visible, you can proceed with your script
+                clearInterval(checkVisibility); // Stop checking
+                // Your code here
+
+                inputElement.on('click', function (e) {
+                    let shipping_pickup_id = jQuery("#shipping_pickup_id").val();
+                    console.log("Clicked");
+                    console.log(carrier_id);
+                    console.log(window.mandatoryData);
+                    if (window.mandatoryData != "" && window.mandatoryData.pickupMandatory && shipping_pickup_id == ""){
+
+                        var modal = jQuery('<div>', { id: 'myModal', css: {
+                                'display': 'none',
+                                'position': 'fixed',
+                                'z-index': '1',
+                                'left': '0',
+                                'top': '0',
+                                'width': '100%',
+                                'height': '100%',
+                                'overflow': 'auto',
+                                'background-color': 'rgba(0,0,0,0.4)'
+                            }});
+
+                        var modalContent = jQuery('<div>', { css: {
+                                'background-color': '#fefefe',
+                                'margin': '15% auto',
+                                'padding': '20px',
+                                'border': '1px solid #888',
+                                'width': '80%'
+                            }});
+
+                        var closeButton = jQuery('<span>', { text: '×', css: {
+                                'color': '#aaa',
+                                'float': 'right',
+                                'font-size': '28px',
+                                'font-weight': 'bold',
+                                'cursor': 'pointer'
+                            }});
+
+                        var message = jQuery('<p>', { text: GLSDk_mandatory_point });
+
+
+                        let button = jQuery("<button class='button alt GLSDk-pick-location' id='GLSDk_pickup_button' type='button' onClick='GLSDk.getPickupLocations(event)'>" + GLSDk_choose_pickup_location + "</button>");
+
+
+
+                        // Append the elements
+                        modalContent.append(closeButton);
+                        modalContent.append(message);
+                        modal.append(modalContent);
+                        modalContent.append(button);
+
+                        jQuery('body').append(modal);
+
+                        // Show the modal
+                        modal.show();
+
+                        // Close the modal when the user clicks on <span> (x)
+                        closeButton.on('click', function() {
+                            modal.hide();
+                        });
+
+                        // Close the modal when the user clicks anywhere outside of the modal content
+                        jQuery(window).on('click', function(event) {
+                            if (jQuery(event.target).is(modal)) {
+                                modal.hide();
+                            }
+                        });
+
+
+                        return false;
+                    }
+                })
+
+            }
+        }, 100); // Check every 100 milliseconds
+
+
+        // jQuery('#place_order')
+
+
+    }
+
+getSelectedCarrier() {
+    console.log("selectedCarrier");
+
+    // Remove loader if it exists
+    if (jQuery('#shipping-loader').length) {
+        jQuery('#shipping-loader').remove();
+    }
+
+    console.log(window.selectedText);
+    window.mandatoryData = "";
+    
+    // Check if we've already fetched this carrier data
+    if (this.carrierCache[window.selectedText]) {
+        this.processCarrierData(this.carrierCache[window.selectedText]);
+        return;
+    }
+
+    let req = {
+        'action': 'GLSDk_selected_carrier',
+        'carrier': window.selectedText
+    };
+
+    jQuery.getJSON(this.options.ajax_url, req, (data) => {
+        console.log("Carrier data received");
+        
+        // Cache the response for future use
+        this.carrierCache[window.selectedText] = data;
+        
+        // Process the data
+        this.processCarrierData(data);
+    }).fail((err) => {
+        console.log("Fatal error widget requesting points do we have an API bug?");
+        // Enable button in case of error to prevent UI being stuck
+        this.enableButton();
+    });
+}
+
+// Method to process carrier data - extracted from getSelectedCarrier
+processCarrierData(data) {
+    this.disableButton();
+    jQuery('#GLSDk-pickup__description').hide();
+    jQuery("#GLSDk_pickup_button").remove();
+
+    console.log(data.status);
+    if (data.status == 1) {
+        console.log("Carrier requires pickup");
+        
+        if (data.pickupMandatory === true) {
+            window.mandatoryData = data;
+        }
+        
+        this.carrier_id = data.carrier_id;
+        window.carrier_id = data.carrier_id;
+        
+        // Optimize visibility check with a single interval
+        this.checkAndSetupPickupButton();
+    } else {
+        console.log("BUTTON ENABLED GET SELECTED CARRIER");
+
+        if (jQuery('#GLSDk-pickup__description').length > 0) {
+            jQuery('#GLSDk-pickup__description').hide();
+        }
+
+        this.enableButton();
+    }
+}
+
+// New method to check for shipping control visibility and setup pickup button
+checkAndSetupPickupButton() {
+    const checkVisibility = setInterval(() => {
+        const $inputElement = jQuery(".wc-block-components-shipping-rates-control__package");
+
+        if ($inputElement.is(':visible')) {
+            clearInterval(checkVisibility);
+            console.log("Shipping control is visible");
+            
+            this.getBlockShippingData();
+            
+            // Create pickup button only if it doesn't exist
+            if (jQuery('#GLSDk_pickup_button').length <= 0) {
+                this.createPickupElements($inputElement);
+            }
+
+            this.mapinterface.setCarrierId(this.carrier_id);
+
+            if (jQuery('#GLSDk_pickup_button').is(':visible')) {
+                console.log('Button is visible, enabling checkout button');
+                
+                // Enable checkout button after a short delay
+                setTimeout(() => {
+                    this.enableCheckoutButton();
+                }, 300);
+            }
+        }
+    }, 100);
+}
+
+// Method to create pickup elements
+createPickupElements($container) {
+    console.log("Creating pickup button and related elements");
+    
+    // Create all elements at once
+    const elements = {
+        button: jQuery("<button class='button alt GLSDk-pick-location' type='button' id='GLSDk_pickup_button' onClick='GLSDk.getPickupLocations(event)'>"+ GLSDk_choose_pickup_location +"</button>"),
+        pickupId: jQuery("<input type='hidden' name='shipping_pickup_id' id='shipping_pickup_id'/>"),
+        pickupLabel: jQuery("<input type='hidden' name='shipping_pickup_label' id='shipping_pickup_label'/>"),
+        pickupExtended: jQuery("<input type='hidden' name='GLSDk_pickup_extended' id='shipping_pickup_extended'/>"),
+        pickupDescription: jQuery("<span className='GLSDk-pickup__description' id='GLSDk-pickup__description'></span>"),
+        carrierId: jQuery("<tr style='display: none'><td><input type='hidden' name='shipping_carrier_id' id='shipping_carrier_id'/>")
+    };
+    
+    // Append all elements in one go to minimize DOM operations
+    Object.values(elements).forEach(element => {
+        $container[0].append(element[0]);
+    });
+}
+
+// New method to enable checkout button
+enableCheckoutButton() {
+    console.log('Enabling checkout button');
+    
+    jQuery('.wc-block-components-checkout-place-order-button')
+        .prop('disabled', false)
+        .css({
+            'background-color': 'black',
+            'cursor': 'pointer',
+            'opacity': '1'
+        });
+}
+
+    isBlockCheckout(){
+        if (jQuery(".wc-block-checkout").length > 0){
+            return true;
+        }
+        return false;
+    }
+
+    getOnClick(){
+        jQuery("#sw-query-btn").on('click' , () => {
+            this.geocodeQuery();
+        })
+
+        jQuery('form[name="checkout"]').on('change', () => {
+            // This function will be triggered when any form field inside the "checkout" form is changed
+            console.log("Form changed!");
+            this.getFormShippingData();
+            // You can perform your desired actions here
+        });
+
+    }
+
+    getFormShippingData() {
+
+        var country = jQuery('#billing_country').val(),
+            state = jQuery('#billing_state').val(),
+            postcode = jQuery('input#billing_postcode').val(),
+            city = jQuery('#billing_city').val(),
+            address = jQuery('input#billing_address_1').val(),
+            address_2 = jQuery('input#billing_address_2').val(),
+            s_country = country,
+            s_state = state,
+            s_postcode = postcode,
+            s_city = city,
+            s_address = address,
+            s_address_2 = address_2;
+
+
+        if (jQuery('#ship-to-different-address').find('input').is(':checked')) {
+            s_country = jQuery('#shipping_country').val();
+            s_state = jQuery('#shipping_state').val();
+            s_postcode = jQuery('input#shipping_postcode').val();
+            s_city = jQuery('#shipping_city').val();
+            s_address = jQuery('input#shipping_address_1').val();
+            s_address_2 = jQuery('input#shipping_address_2').val();
+        }
+
+        jQuery('input[aria-label*="Country/Region"]').each(function() {
+            var s_country = jQuery(this).val();
+        });
+
+        window.GLSDk_shipping_address = {
+            "Address":{
+                "Lat": "",
+                "Long": "",
+                "Streetname1": s_address,
+                "Streetname2": s_address_2,
+                "HouseNumber": '',
+                "NumberExtension": '',
+                "PostalCode": s_postcode,
+                "s_postcode": s_postcode,
+                "City": s_city,
+                "Country": s_country,
+                "State": s_state,
+
+            },
+            post_data: jQuery('form.checkout').serialize(),
+            "CarrierId": jQuery("#shipping_carrier_id").val()
+        };
+        this.options.address = window.GLSDk_shipping_address.Address;
+    }
+
+    getGLSDkId(mage_id) {
+        var carrier_id = mage_id.match(/([\d]+)_pickup/);
+        if (carrier_id != null) {
+            return carrier_id[1];
+        }
+
+        for (let x = 0; x < GLSDk_carriers.length; ++x) {
+            if (GLSDk_carriers[x].ClassName === mage_id) {
+                return typeof (GLSDk_carriers[x].Id) == 'object' ? GLSDk_carriers[x].Id['0'] : GLSDk_carriers[x].Id;
+            }
+        }
+
+        return 0;
+    }
+
+    /*
+    * Adds the map to the page
+    */
+    init() {
+        this.options.address && this.setAddress(this.options.address);
+        this.loadScripts();
+
+        !this.options.address && localStorage.getItem('GLSDkAddress') && this.setAddress(JSON.parse(localStorage.getItem('GLSDkAddress')));
+    };
+
+
+    addPointInfo(p, selected, extra_class, parentContainer) {
+        if (typeof(extra_class) == 'undefined') {
+            extra_class = '';
+        }
+
+        let open = typeof(p.WorkingHoursRaw) != 'undefined' && p.WorkingHoursRaw ? JSON.parse(p.WorkingHoursRaw) : [];
+        let openhtml = '';
+        let m2f = '';
+        let wkd = '';
+        let local = p.Information.Address;
+
+        /* ----------------------
+        / To replace when we have an actual format for it  */
+        let openHours = [];
+
+        /* LEGACY code that we are using to transform the raw data into something we can work with  ----------- */
+        let regexFormatDev = new RegExp(/([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)/, 'g');
+        let regexFormatLive = new RegExp(/([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)\_([a-zA-Z0-9]+)/, 'g');
+        let regexFormat = regexFormatLive;
+        let regDay = 1; /* Monday, Tuesday ..*/
+        let regOpenIdx = 4; /* 1,2,... */
+        let regTypeIdx = 2; /* Open | closing */
+
+
+        if (Object.keys(open).length > 0 && Object.keys(open).shift().match(regexFormatDev)) {
+            regexFormat = regexFormatDev;
+            regTypeIdx = 3;
+            regOpenIdx = 7;
+        }
+
+        for (let key in open) {
+            let value = open[key];
+
+            if (key.match(regexFormat)) {
+                let res = regexFormat.exec(key);
+                let dayname = res[regDay];
+                let openidx = parseInt(res[regOpenIdx]) - 1;
+                let dayidx = this.weekdaynames.indexOf(dayname);
+
+                if (typeof(openHours[dayidx]) == 'undefined') {
+                    openHours[dayidx] = [];
+                }
+
+                if (typeof(openHours[dayidx][openidx]) == 'undefined') {
+                    openHours[dayidx][openidx] = {
+                        OpenTime: '',
+                        CloseTime: ''
+                    };
+                }
+
+                openHours[dayidx][openidx][res[regTypeIdx] == 'Closing' ? 'CloseTime' : 'OpenTime'] = value;
+            }
+        }
+
+        /* Make sure it's sorted */
+        for (let i = 0; i < openHours.length; ++i) {
+            /* Sometimes it's closed on monday meaning there's nothing at idx 0*/
+            if (typeof(openHours[i]) != "undefined") {
+                let schedule = openHours[i];
+                schedule.sort((a, b) => {
+                    let aopen = parseInt(a.OpenTime.substring(0, 2));
+                    let bopen = parseInt(b.OpenTime.substring(0, 2));
+                    return aopen - bopen;
+                });
+            }
+        }
+
+        /* Group data set
+        Label can be:
+        First day - last day with same schedule
+        Every day */
+
+        open = (typeof(p.WorkingHours) != 'undefined') ? p.WorkingHours : openHours;
+        /** It's a hash, not an array **/
+        let ndaysopen = Object.keys(open).length;
+        let fromday = this.weekdaynames[0];
+        let previousTime = '';
+        let hourshtml = '';
+        let fromdayidx = 0;
+        let toDay = '';
+        /*-------*/
+
+        for (let i = 0; i < 7; ++i) {
+            let day = open[i];
+            let dayhtml = '';
+            let today = this.weekdaynames[i];
+
+            dayhtml += `<div class="sw-point-info-day">`;
+            hourshtml = '';
+
+            for (let j = 0; day && j < day.length; ++j) {
+                let hours = day[j];
+                if (hours.OpenTime == null && hours.CloseTime == '23:59') {
+                    hourshtml += '24h';
+                } else {
+                    hourshtml += (hourshtml ? ' | ' : '') + `<span>${hours.OpenTime ? hours.OpenTime  : ''} - ${hours.CloseTime ? hours.CloseTime : ''}</span>`;
+                }
+            }
+
+            /** last day or different time, print last **/
+            if ( previousTime && (previousTime != hourshtml) || (i == 6)) {
+                /** not a lot of sense in mon-mon*/
+                let isinterval = i - fromdayidx > 2;
+                let islast = i==6;
+
+                if (previousTime) {
+                    toDay = (islast && (hourshtml == previousTime)) ? this.weekdaynames[i] : this.weekdaynames[i-1];
+                    dayhtml += `<label>${( isinterval && fromday ? fromday + ' - ' : '' ) + toDay}:</label><span>${previousTime}</span></div>`;
+                    openhtml += dayhtml;
+                }
+
+                if (islast && hourshtml &&  (hourshtml != previousTime)) {
+                    openhtml += `<div class="sw-point-info-day"><label>${this.weekdaynames[i]}:</label><span>${hourshtml}</span></div></div>`;
+                }
+
+                fromday = i < ndaysopen - 1 ? this.weekdaynames[i] : '';
+                fromdayidx = i;
+                previousTime = hourshtml;
+
+
+            } else {
+                previousTime = hourshtml;
+            }
+        }
+
+        if (!openhtml && previousTime) {
+            openhtml = `<label>${fromday} - ${this.weekdaynames[ndaysopen - 1]}: </label><span>${previousTime}</span></div>`;
+        }
+
+        /* / END LEGACY code ----------- */
+
+        console.log("Point");
+        console.log(p);
+
+        let ePointInfo = jQuery(`<div class="sw-point-info ${extra_class}">
+  <h4 class='sw-point-info-name'>${p.Information.Name}</h4>
+  <div class='sw-point-info-addr'>${local}</div>
+  ${p.Distance !== null ? `<div class='sw-point-info-distance'>` + GLSDk_distance + " " + ` ${p.Distance} ` + GLSDk_meter + " " + `</div>` : ''}
+  <div class='sw-point-info-open'>${this.getWorkingDays(p.WorkingHours)}</div>
+</div>`);
+
+        /* Is there aditional information required?  */
+        if (typeof(p.MapFieldsSelect) != 'undefined') {
+            let moreFields = p.MapFieldsSelect;
+            for (let k = 0; k < moreFields.length; ++k) {
+                ePointInfo.append(`<div class="sw-point-info-additional"><label>${moreFields[k]}</label><input data-id="${moreFields[k]}" class="GLSDk_mapfields${p.PointId}" type="text"  id="${moreFields[k]}${p.PointId}"/></div>`);
+            }
+        }
+
+        let btn = jQuery(`<button class="sw-point-info-btn ${selected ? 'selected' : ''}">${selected ? GLSDk_selected : GLSDk_select}</button>`);
+        btn.on('click', () => {
+            this.selectPoint(p);
+        });
+
+        ePointInfo.append(btn);
+        parentContainer.append(ePointInfo);
+    };
+
+    /**
+     * Append custom style
+     * @param string css - a string with the style to inject
+     */
+    addCustomStyle(css) {
+
+        var style = document.createElement("style");
+        style.type = "text/css";
+
+        if (style.styleSheet) {
+            style.styleSheet.cssText = css;
+        } else {
+            style.appendChild(document.createTextNode(css));
+        }
+
+        document.getElementsByTagName("head")[0].appendChild(style);
+    };
+
+    addMapHtml() {
+        console.log("ADD MAP HTML Options address")
+
+        let addresstr = '';
+        /* Ireland does not have postal codes */
+        if (this.options.address.Streetname1) {
+            addresstr = this.options.address.PostalCode ? this.options.address.PostalCode : this.options.address.Streetname1;
+        }
+        let maphtml = `<div id="sw">
+    <div id="sw__overlay"></div>
+    <div id="sw__container">
+      <div id="sw-search">
+        <div id="sw-query-wrapper">
+          <input type="text" id="sw-query" placeholder="${addresstr}">
+        </div>
+        <div id="sw-query-results"></div>
+        <div id="query-options">
+        </div>
+      </div>
+      <div id="sw-display-options">
+      </div> 
+      <div id="sw-map-wrapper" class="sw-tab selected">
+        <div class="sw-query-results-description"></div>
+        <div id="sw-map" class="GLSDk-pickup__map"></div>
+        <div id="sw-map-error"></div> 
+        <div id="sw-map-selected-point"></div>
+      </div>  
+      <div class='sw-tab'>
+        <div class="sw-query-results-description"></div>
+        <div id="sw-list-points"></div>
+      </div>
+      <div id="sw-map-message"></div>
+      <div id="sw-search-status">
+        <div class="sw-loader"><div></div><div></div><div></div></div>
+      </div>
+    </div>
+  </div>`;
+        jQuery(this.mapParentContainer).append(maphtml);
+        let displayOptions = jQuery("#sw-display-options");
+        let optMap = jQuery(`<span class='sw-display-option selected'>`+GLSDk_map+`</span>`);
+        let optList = jQuery(`<span class='sw-display-option'">`+GLSDk_list+`</span>`);
+
+        optMap.on('click', () => {
+            this.selectDisplayOption(0);
+        });
+        optList.on('click', () => {
+            this.selectDisplayOption(1);
+        });
+
+        displayOptions.append(optMap);
+        displayOptions.append(optList);
+
+        let queryopt = jQuery("#sw-query-wrapper");
+        let searchbtn = jQuery(`<button id="sw-query-btn"">`+GLSDk_search+`</button>`);
+        queryopt.append(searchbtn);
+
+        searchbtn.on('click', () => {
+            this.geocodeQuery();
+        });
+
+        let queryinput = jQuery("#sw-query");
+        queryinput.on('keyup', (evt) => {
+            if (evt.keyCode == 13) {
+                this.geocodeQuery();
+            }
+
+            this.timeoutKeyDown && clearTimeout(this.timeoutKeyDown);
+            this.timeoutKeyDown = setTimeout(() => {
+                this.geocodeQuery();
+            }, 300);
+        });
+
+        jQuery("#sw__overlay").click(() => {
+            this.closeMap();
+        });
+    };
+
+
+    /**
+     * @param decimal lat
+     * @param decimal lng
+     */
+    centerMap(lat, lng) {
+        this.mapinterface.centerMap(lat, lng);
+    };
+
+    /**
+     * Hide the map
+     */
+    closeMap() {
+        jQuery("#sw")
+            .removeClass("open");
+        jQuery('html,body')
+            .scrollTop(this.userScroll);
+    };
+
+    displayMessage(msg) {
+        console.log("Message display");
+        console.log(msg);
+        jQuery('#sw-map-message').addClass("open");
+
+        if (msg.Id == 99){
+            console.log("IF 99");
+            jQuery('#sw-map-message').html(GLSDk_no_points_found);
+        }
+        else {
+            jQuery('#sw-map-message').html(msg);
+        }
+    };
+
+    /**
+     * Display the possible option to the user in a list under the search input
+     */
+
+    //
+    // ##DJDJ Bpost stuff
+    displayPlaces(places) {
+        console.log(11);
+        jQuery(".sw-query-results-description").html('');
+
+        this.queryResults = places;
+        let resultsContainer = jQuery("#sw-query-results");
+
+        // ##DJDJ Ovde verovatno treba izmena da se odradi
+        console.log("Display places");
+        console.log(places);
+
+        let html = '';
+        for (let i = 0; i < places.length; ++i) {
+
+            if (typeof places[i].address.PostalCode != 'undefined'){
+                console.log("Found place")
+                html += `<div class="sw-query-result" data-idx="${i}">${places[i].display_name}</div>`
+            }
+        }
+
+        if (!html) {
+            console.log("No place found");
+            html = GLSDk_no_results;
+        }
+
+        console.log(22);
+
+        resultsContainer.html(html);
+        jQuery(".sw-query-result").on('click', (evt) => {
+
+            console.log(33);
+
+            let idx = jQuery(evt.target).attr("data-idx");
+
+            if (parseInt(idx) == 'isNaN' || idx > this.queryResults.length) {
+                console.log("invalid idx selected: ", idx);
+                return;
+            }
+
+            let place = this.queryResults[idx];
+
+            this.options.address.Lat = place.lat;
+            this.options.address.Long = place.lng;
+
+            console.log("selected ", this.queryResults[idx]);
+            jQuery("#sw-query-results").html('');
+            jQuery("#sw-query").val(place.display_name);
+            if (typeof(place.address) != 'undefined') {
+                for (let prop in place.address) {
+                    if (place.address[prop] && (place.address[prop].length > 0)) {
+                        this.options.address[prop] = place.address[prop];
+                    }
+                }
+            }
+            this.options.address.Streetname1 = place.address.Streetname1;
+            console.log(place.address, "Address is now ", this.options.address);
+            this.fetchPoints(this.options.address);
+        });
+    };
+
+    hashLatLng(point) {
+        let latstr = (point.lat + '').replace('.', '-');
+        let lngstr = (point.lng + '').replace('.', '-');
+
+        return 'r' + latstr + '_' + lngstr;
+    };
+
+
+    displayResults(data) {
+        console.log("DisplayPoints22322");
+        console.log(data);
+        this.mapinterface.clearMarkers();
+        jQuery("#sw__container").removeClass('searching');
+        this.pickupPointsLoadStop();
+        jQuery(".sw-query-results-description").html("<div class='sw-query-results-description'>" + GLSDk_the +  data.Count + GLSDk_closest + "</div>");
+
+        // ##DJDJ WP exclusive issue because of this
+        setTimeout(() => {
+
+        this.pickupPoints = data.Point;
+        this.mapChanged = Date.now();
+
+        this.updateList(this.pickupPoints);
+        this.mapinterface.addMarkers(this.pickupPoints, (idx) => {
+            console.log("Added markers")
+            let parent = jQuery("#sw-map-selected-point");
+            parent.html("");
+            this.addPointInfo(this.pickupPoints[idx], 0, '', parent);
+            console.log("added point info")
+            this.mapinterface.selectPoint(idx);
+            console.log("After select point break")
+        });
+
+
+        }, 100);
+
+    };
+
+
+    /***
+     * Get Points from the API and display them
+     **/
+    fetchPoints(address, fresolve) {
+        // ##DJDJ Ako je block ovo ne treba, ako nije onda treba
+        if (!this.isBlockCheckout()){
+            this.carrier_id = jQuery('#shipping_carrier_id').val();
+            this.setCarrierId(jQuery('#shipping_carrier_id').val());
+        }
+        address.Country = jQuery('#shipping-country').val();
+
+        // ##DJDJ Ovo dole u else je visak izgleda
+        // else {
+        //     this.setCarrierId(this.carrier_id);
+        // }
+        console.log("FetchPoints232222");
+        // ##DJDJ Ovde si stao, treba se proslediti carrier id nekako
+        console.log(address);
+        console.log(this.carrier_id);
+
+        this.selectedPoint = null;
+
+        jQuery("#sw-map-selected-point").html('');
+        jQuery('#sw-map-message').removeClass('open');
+        jQuery(".sw-query-results-description").html('');
+
+        if (!this.mapinterface.isMapMoving()) {
+            jQuery("#sw__container").addClass('searching');
+        }
+
+        if (typeof (this.cacheResults[this.hashLatLng({
+            lat: this.options.address.Lat,
+            lng: this.options.address.Long
+        })]) != "undefined") {
+            console.log("OVDEEEEE");
+            this.displayResults(this.cacheResults[this.hashLatLng({lat: this.options.address.Lat, lng: this.options.address.Long})]);
+        }
+
+        let req = {
+            "Address": address,
+            "CarrierId": this.carrier_id,
+            'action': 'GLSDk_pickup_locations'
+        };
+
+        jQuery.getJSON(this.options.ajax_url, req ,  (data)  => {
+            console.log("Caoaooo nasaooo");
+            console.log(this.options.ajax_url);
+            this.mapinterface.clearMarkers();
+            console.log(data);
+            /* We have the points remove the loader */
+            this.pickupPointsLoadStop();
+
+            jQuery("#sw-map-wrapper").removeClass('loading');
+            this.searchRunning = false;
+
+            jQuery("#sw__container").removeClass('searching');
+
+            this.searchRunning = false;
+
+            if (data.Error && data.Error.Id != 0) {
+                this.displayMessage(data.Error);
+            }
+
+            if (data.Point) {
+                if (data.Point.length > 0) {
+                    this.cacheResults[this.hashLatLng({lat: this.options.address.Lat, lng: this.options.address.Long})] = data;
+                    this.displayResults(data);
+                } else {
+                    this.displayMessage(GLSDk_no_points_found);
+                }
+            }
+
+            if (typeof (fresolve) != 'undefined') {
+                /* We want to make sure changes are commited to the dom before we declare we're done */
+                setTimeout(() => {
+                    fresolve();
+                }, 300);
+            }
+        }).fail((err) => {
+            this.displayMessage(GLSDk_no_points_found);
+            console.log("Fatal error widget requesting points do we have an API bug?", err.responseText);
+        });
+    };
+
+    geocodeQuery() {
+        jQuery("#sw-query-results").html('');
+
+        console.log("Geocode query");
+
+        let queryval = jQuery("#sw-query").val();
+
+        console.log(queryval);
+
+        this.options.address.Lat = null;
+        this.options.address.Long = null;
+
+        if (queryval.length < 4) {
+            return;
+        }
+
+        console.log("OVOTITREBA");
+        console.log(this.options.address);
+        console.log(this.mapinterface);
+
+
+        console.log("OVDE COUNTRY");
+
+        if (jQuery('#components-form-token-input-0').length){
+            this.options.address.Country = jQuery('#components-form-token-input-0').val();
+        }
+        else if (jQuery("#shipping-country option:selected").length){
+            this.options.address.Country = jQuery("#shipping-country option:selected").text();
+        }
+        else if(jQuery('#shipping-country').length > 0){
+            this.options.address.Country = jQuery('#shipping-country option:selected').text();
+        }
+        else if(jQuery('#select2-billing_country-container').length > 0){
+            this.options.address.Country = jQuery('#select2-billing_country-container').text();
+        }
+
+
+        if (GLSDk_PLUGIN_URL.includes('Bpost') && (this.options.address.Country == 'BE' || this.options.address.Country == 'be' || this.options.address.Country == 'Belgium')){
+            this.mapinterface.geocodeBpost({
+                "address": queryval,
+                "country": 'BE'
+            }, (resp) => {
+                console.log("Geocodeeee");
+                console.log(resp);
+                this.displayPlaces(resp);
+            });
+        }else {
+            this.mapinterface.geocode({
+                "address": queryval,
+                "country": this.options.address.Country
+            }, (resp) => {
+                console.log("Geocodeeee");
+                console.log(resp);
+                this.displayPlaces(resp);
+            });
+        }
+    };
+
+    /**
+     *
+     * @param shippingData, the address parts
+     * @param f_callback , the function to call when all mighty google returns a result
+     */
+    geocodeAddress(address, f_callback) {
+        console.log(address);
+        console.log("GEOCODEADDRESS");
+        if (address.country == 'Portugal' && typeof (missingZipPT) != 'undefined') {
+            /* Is this a postal code we know is not geocodable in nominatim? */
+            let zip4dig = address.postcode.substring(0, 4);
+            for (let i = 0; i < missingZipPT.length; ++i) {
+                if (missingZipPT[i].zipcode == zip4dig) {
+                    this.queryResults = [{
+                        display_name: missingZipPT[i].display_name,
+                        lat: missingZipPT[i].lat,
+                        lng: missingZipPT[i].lng,
+                        address: {
+                            street: "street",
+                            postcode: address.postcode,
+                            city: missingZipPT[i].display_name,
+                            country_code: address.country,
+                        }
+                    }];
+                    console.log(this.queryResults);
+                    f_callback(this.queryResults);
+                    return;
+                }
+            }
+        }
+
+        console.log("Nije reseno");
+        console.log(this.mapinterface);
+
+        console.log("ADRESA");
+        console.log(address);
+
+        if (GLSDk_PLUGIN_URL.includes('Bpost') && (address.Country == 'BE' || address.Country == 'be' || address.Country == 'Belgium')){
+            this.mapinterface.geocodeAddressPartsBpost( (geocode)  => {
+                if (!geocode.lat) {
+                    return this.mapinterface.geocodeAddressPartsBpost( (geocode) => {
+                        f_callback(geocode);
+                    }, address.City, address.Country);
+                }
+
+                f_callback(geocode);
+            }, address.City, address.Country, address.PostalCode, address.Streetname1);
+        }else {
+            this.mapinterface.geocodeAddressParts( (geocode)  => {
+                if (!geocode.lat) {
+                    return this.mapinterface.geocodeAddressParts( (geocode) => {
+                        f_callback(geocode);
+                    }, address.City, address.Country);
+                }
+
+                f_callback(geocode);
+            }, address.City, address.Country, address.PostalCode, address.Streetname1);
+        }
+    };
+
+    mapMoved(mapcenter) {
+        jQuery("#sw-point-info").html("");
+        return new Promise((resolve, reject) => {
+            this.options.address.Lat = mapcenter.lat;
+            this.options.address.Long = mapcenter.lng;
+            this.fetchPoints(this.options.address, resolve);
+        });
+    };
+
+    loadLabels(fcallback) {
+        jQuery.getJSON(this.options.ajaxLoadLabels, (resp) => {
+            this.options.labels = resp;
+            fcallback(resp);
+        })
+            .fail((err) => {
+                console.log("error fetching widget labels at " + this.options.ajaxLoadLabels, err);
+            });
+    };
+
+    loadScripts() {
+        console.log("Load scripts widget");
+        /* not defined or version < 1.7 compare only subversion for simplicity **/
+        if (typeof (jQuery) == 'undefined' || (parseInt(jQuery.fn.jquery.substring(2, 2)) < 7)) {
+            console.log("Load scripts widget if");
+            var me = this;
+            this.loadScript('https://code.jquery.com/jquery-3.7.0.min.js', function () {
+                me.scriptsLoaded();
+                if (me.options.oninit) {
+                    me.options.oninit();
+                }
+            });
+        } else {
+            console.log("jquery is widget loaded bootstrap");
+            this.scriptsLoaded();
+            if (this.options.oninit) {
+                this.options.oninit();
+            }
+        }
+    };
+
+
+    /**
+     * @param String url - the url of the script to load
+     * @param String callback - the name of the function to call after the script is loaded
+     */
+    loadScript(url, callback) {
+        console.log("Load Script widget singular");
+        var script = document.createElement("script");
+        script.type = "text/javascript";
+
+        if (script.readyState) { /*IE */
+            script.onreadystatechange = () => {
+                if (script.readyState == 'loaded' || script.readyState == 'complete') {
+                    script.onreadystatechange = null;
+                    calback && callback();
+                }
+            };
+        } else {
+            script.onload = () => {
+                callback && callback();
+            };
+        }
+
+        script.src = url;
+        document.getElementsByTagName("head")[0].appendChild(script);
+    };
+
+
+    /**
+     * @param string url
+     */
+    static loadStyle(url) {
+
+        console.log("LOADDDDD TESTTTTTTT");
+        var style = document.createElement('link');
+        style.rel = 'stylesheet';
+        style.href = url;
+
+        document.getElementsByTagName('head')[0].appendChild(style);
+    };
+
+    log(msg, force) {
+        if (!force && !this.options.debug) {
+            return;
+        }
+
+        console.log(msg);
+    };
+
+    /**
+     * clear any ui elements that result from selection and other state variables
+     */
+    resetMapElements() {
+        this.selectedPoint = null;
+
+        jQuery("#sw-map-selected-point").html('');
+        jQuery('#sw-map-message').removeClass('open');
+        jQuery(".sw-query-results-description").html('');
+    };
+
+    openMap() {
+        console.log("Open map widget23222222666666");
+
+        if (!this.isBlockCheckout()){
+            var platform = new Woocommerce();
+            this.options.address = platform.getShippingData().Address;
+
+        }
+
+
+        // console.log(this.carrier_id);
+        this.userScroll = jQuery('html,body')
+            .scrollTop();
+
+        jQuery('html,body')
+            .scrollTop(0);
+
+        jQuery("#sw")
+            .addClass("open");
+        jQuery("#sw-map-wrapper").addClass('loading');
+
+        console.log("Ovdeee 1");
+
+        jQuery("#sw-query").val(this.options.address.Streetname1);
+        this.selectDisplayOption(0);
+
+        console.log("Ovdeee 3");
+        console.log(this.options.address)
+
+        if (this.options.address.Streetname1) {
+            console.log("Ima ulicu");
+            if (!this.options.address.lat) {
+                console.log("Nema lat");
+                this.geocodeAddress(this.options.address, (geo) => {
+                    console.log("GEOOOOOOOO");
+                    console.log(geo);
+                    geo.length && (geo = geo[0]);
+                    this.options.address.Lat = geo.lat;
+                    this.options.address.Long = geo.lng;
+                    console.log("GEOCODE222");
+                    console.log(this.options.address);
+                    this.fetchPoints(this.options.address);
+                });
+            } else {
+                console.log("Nema ulicu i ide u fetch");
+                this.fetchPoints(this.options.address);
+            }
+        }
+    };
+
+    getShippingData(){
+        let shippingData = [];
+        this.getBlockShippingData();
+        shippingData["Address"] = this.options.address;
+        // shippingData["CarrierId"] = this.carrier_id;
+        return shippingData;
+    }
+
+    getBlockShippingData(){
+        var address = jQuery('#shipping-address_1').val();
+        var apartment = jQuery('#shipping-address_2').val();
+        var city = jQuery('#shipping-city').val();
+        var postalCode = jQuery('#shipping-postcode').val();
+
+        // Extracting Country
+        var country = jQuery('#components-form-token-input-0').val();
+
+
+        if (country == ""){
+            console.log("COUNTRY EMPTY");
+            jQuery('input[aria-label*="Country/Region"]').each(function() {
+                country = jQuery(this).val();
+            });
+        }else if(country == ""){
+            country = jQuery('#shipping-country option:selected').text()
+        }
+
+        console.log("BLOCK SHIPPING DATA ON GET BLOCK SHIPPING DATA");
+        console.log(country);
+
+        window.GLSDk_shipping_address =
+        {
+            "Address":{
+                "Lat": "",
+                "Long": "",
+                "Streetname1": address,
+                "Streetname2": '',
+                "HouseNumber": apartment,
+                "NumberExtension": '',
+                "PostalCode": postalCode,
+                "s_postcode": postalCode,
+                "City": city,
+                "Country": country,
+                "State": '',
+            },
+        };
+        this.options.address = window.GLSDk_shipping_address.Address;
+
+    }
+
+    pickupPointsLoadStop() {
+        jQuery("#sw-map-wrapper").removeClass('loading');
+        this.searchRunning = false;
+    };
+
+    /**
+     *  Resets the selected point to null
+     **/
+    resetSelection() {
+        this.selectedPoint = null;
+    };
+
+    selectPoint(pickup) {
+        console.log("Select POINT");
+        console.log(pickup);
+        this.selectedPoint = pickup;
+
+        if (jQuery('#GLSDk-pickup__description').length && jQuery('#GLSDk-pickup__description').is(':hidden')) {
+            jQuery('#GLSDk-pickup__description').show();
+        }
+
+        if (jQuery('.GLSDk-pickup__description').length && jQuery('.GLSDk-pickup__description').is(':hidden')) {
+            jQuery('.GLSDk-pickup__description').show();
+        }
+
+        localStorage.setItem('GLSDkPointId', pickup.PointId);
+        localStorage.setItem('GLSDkPointLabel', pickup.Information.Name);
+
+        /** What view are we on ? **/
+        let eFieldInfo = jQuery("#sw-map-selected-point");
+        if (this.selectedDisplayOption == 1) {
+            eFieldInfo = jQuery("#sw-list-points");
+        }
+        /* Validate if this point requires aditional info that's not present fail here */
+        if (typeof (pickup.MapFieldsSelect) != 'undefined' && pickup.MapFieldsSelect.length > 0) {
+            let extrasValid = true;
+            eFieldInfo.find('.GLSDk_mapfields' + pickup.PointId).each((idx, elem) => {
+                let eExtra = jQuery(elem);
+
+                if (!eExtra.val()) {
+                    alert(jQuery(jQuery('.GLSDk_mapfieldslabel' + pickup.PointId).get(idx)).text() + ': ' + this.options.labels.mapfieldmandatory);
+                    extrasValid = false;
+                }
+            });
+
+            if (!extrasValid) {
+                console.log("point selection widget is not valid, ignoring");
+                return false;
+            }
+        }
+
+        console.log( jQuery(".GLSDk-pickup__description"));
+        jQuery(".GLSDk-pickup__description")
+            .html(pickup.Information.Name + " " + pickup.Information.Address);
+
+        const pickupPoint = {
+            id_carrier: this.carrier_id,
+            pickup_id: this.selectedPoint.PointId,
+            pickup_label: (this.selectedPoint.Information.Name ? this.selectedPoint.Information.Name + '<br/>' : '') +
+                this.selectedPoint.Information.Address,
+            action: 'GLSDk_save_pickup'
+        };
+
+        /*Is there extra info we want to append? */
+        eFieldInfo.find(".GLSDk_mapfields" + this.selectedPoint.PointId).each(function (idx, elem) {
+            let fieldid = jQuery(elem).attr('data-id');
+            let fieldvalue = jQuery(elem).val();
+            pickupPoint['OptionFields'].push({Id: fieldid, Value: fieldvalue});
+            localStorage.setItem(fieldid + 'val', fieldvalue);
+        });
+
+        if (typeof (this.options.ajax_url) == 'undefined') {
+            console.log("Ovdeeee");
+            this.options.onPointSelected(pickup, '');
+        } else {
+            this.platform.setPickupPoint(pickup);
+        }
+
+        this.closeMap();
+        jQuery("#myModal").hide();
+        jQuery('#place_order').prop('disabled', false);
+        jQuery('#pickupText').hide();
+
+        return true;
+    };
+
+    /**
+     *  A Point was selected
+     *  @param idx - integer the selected index
+     **/
+    selectPointFromList(idx) {
+        if (idx > this.pickupPoints.length || idx < 0) {
+            console.log("pointSelected invalid widget index " + idx, 1);
+            return;
+        }
+
+        this.selectPoint(this.pickupPoints[idx]);
+    };
+
+
+    /***
+     * Select the display option
+     * @param idx - int -  0: map, 1: list
+     */
+    selectDisplayOption(idx) {
+        console.log("SELECTDISPOPTION");
+        console.log(idx);
+
+        let eoptions = jQuery(".sw-display-option, .sw-tab");
+        this.selectedDisplayOption = idx;
+        eoptions.removeClass('selected');
+        jQuery(eoptions.get(idx)).addClass('selected');
+        jQuery(jQuery(".sw-tab").get(idx)).addClass('selected');
+
+        if (idx == 0 &&  typeof (this.mapinterface) != 'undefined' && this.mapinterface.pickupPoints.length > 0) {
+            this.mapinterface.fitBounds();
+        }
+    };
+
+    /**
+     * Reset the labels initially sent with options
+     */
+    setLabels(labels) {
+        this.options.labels = labels;
+    };
+
+    setWeekdayNames(weekdaynames) {
+        this.weekdaynames = weekdaynames;
+    };
+
+    setCarrierId(carrier_id) {
+        console.log("Setcarrierid");
+        console.log(carrier_id);
+        this.carrier_id = carrier_id;
+        console.log(this.mapinterface);
+        this.mapinterface.setCarrierId(carrier_id);
+    };
+
+    /**
+     * @param address - object in the same format as we send to the API
+     *
+     **/
+    setAddress(address) {
+        if (!address.Streetname1 || !address.Name) {
+            console.log("invalid address widget ");
+            return;
+        }
+        this.options.address = address;
+        localStorage.setItem('GLSDkAddress', JSON.stringify(address));
+    };
+
+    /**
+     * Called when load scripts ends we must grant that jquery exists
+     */
+    scriptsLoaded() {
+        this.eSearchStatus = jQuery("#search-status");
+        this.addMapHtml();
+
+        if (this.options.gmapskey) {
+            this.mapinterface = new GLSDkGmaps(this.options, this);
+        }
+        else {
+            this.mapinterface = new GLSDkOpenMap2(this.options, this);
+        }
+        this.mapinterface.initMap();
+        this.mapinterface.addMapMoveListener((mapcenter) => { return this.mapMoved(mapcenter); });
+    };
+
+
+    updateList(points) {
+        jQuery("#sw-list-points").html('');
+        let parent = jQuery("#sw-list-points");
+
+        for (let i = 0; i < points.length; ++i) {
+            this.addPointInfo(points[i], 0, '', parent);
+        }
+    }
+
+    disableButton(){
+        jQuery('.wc-block-components-checkout-place-order-button').prop('disabled', true);
+
+        // Add CSS styles for the disabled state
+        jQuery('.wc-block-components-checkout-place-order-button').css({
+            'background-color': 'grey',
+            'cursor': 'not-allowed',
+            'opacity': '0.5'  // Optional: to give it a more disabled look
+        });
+    }
+
+    enableButton(){
+        jQuery('.wc-block-components-checkout-place-order-button').prop('disabled', false);
+
+        // Reset CSS styles for the enabled state
+        jQuery('.wc-block-components-checkout-place-order-button').css({
+            'background-color': 'black',
+            'cursor': 'pointer',
+            'opacity': '1'  // Reset opacity to make it fully visible
+        });
+    }
+    getShippingMethodChenge() {
+        jQuery(document).ready(() => {
+            jQuery("#GLSDk_pickup_button").remove();
+            var checkVisibility = setInterval(() => {
+                var inputElement =  jQuery("input[name='radio-control-0']");
+
+                if (inputElement.is(':visible')) {
+
+                    // The input element is visible, you can proceed with your script
+                    clearInterval(checkVisibility); //
+                    inputElement.on('change', () => {
+                        console.log("Shipping method changed222222222222222");
+
+                        let aria = jQuery("input[name='radio-control-0']:checked").attr('aria-describedby');
+
+                        let regex = /shipping_GLSDk_[0-9]+:[0-9]+/;
+
+                        // Find the match using the regular expression
+                        let match = aria.match(regex);
+
+                        if (match == null){
+                            return;
+                        }
+
+                        let req = {
+                            'action': 'GLSDk_selected_carrier_from_list',
+                            'selected_carrier_code': match[0]
+                        };
+
+                        jQuery.getJSON(this.options.ajax_url, req ,  (data)  => {
+                            console.log("Vrati ga kralju");
+                            console.log(data);
+
+                            this.carrier_id = data.carrier_id;
+                            window.carrier_id = data.carrier_id;
+
+                            console.log(123);
+                            jQuery("#GLSDk_pickup_button").remove();
+
+                            // If not visible, add the button back
+                            let inputElement = jQuery(".wc-block-components-shipping-rates-control__package");
+
+                            // ##DJDJ Ovdeee isto trazi po variabli GLSDk_choose_pickup_location ako se pokvari nesto. Proveriti sutra;
+                            let button = jQuery("<button class='button alt GLSDk-pick-location' type='button' id='GLSDk_pickup_button' onClick='GLSDk.getPickupLocations(event)'>" + GLSDk_choose_pickup_location + "</button>");
+
+                            inputElement[0].append(button[0]); // Adjust the target container if necessary
+
+                        })
+
+                    })
+                }
+            })
+        })
+    }
+
+    getNotBlockFormChange() {
+
+        jQuery('form[name="checkout"] input').change(function() {
+            // var fieldName = jQuery(this).attr('name');
+            var platform = new Woocommerce();
+            this.options.address = platform.getShippingData();
+            console.log(this.options.address);
+            console.log("Form changed");
+        });
+    }
+
+    getWorkingDays(workingHours) {
+        if (!workingHours) {
+            return '';
+        }
+
+        const dayGroups = [];
+        let htmlHours = '';
+
+        for (let day = 0; day < 7; day++) {
+            if (workingHours[day]) {
+                const hourString = this.formatWorkingHours(workingHours[day]);
+                const lastGroup = dayGroups[dayGroups.length - 1];
+
+                if (lastGroup && lastGroup.hours === hourString && lastGroup.end + 1 === day) {
+                    lastGroup.end = day;
+                } else {
+                    dayGroups.push({ start: day, end: day, hours: hourString });
+                }
+            }
+        }
+
+        dayGroups.forEach(group => {
+            /** Valid hour intervals must contain at least one number **/
+            if (group.hours.match(/\d+/) !== null) {
+                const dayRange = group.start === group.end ? this.getDayName(group.start) : `${this.getDayName(group.start)} - ${this.getDayName(group.end)}`;
+                htmlHours += `<div class="sw-point-info-day" style="margin-bottom: -10px"><label>${dayRange}</label>: ${group.hours}</div>`;
+            }
+        });
+
+        return htmlHours;
+    }
+
+    formatWorkingHours(hourIntervals) {
+        return hourIntervals.map(hour => {
+            return hour.OpenTime && hour.CloseTime ? `${hour.OpenTime} - ${hour.CloseTime}` : '';
+        }).filter(Boolean).join(" | ");    }
+
+    getDayName(day) {
+        return this.weekdaynames[day];
+    }
+}
+
+export default GLSDkWidget;
